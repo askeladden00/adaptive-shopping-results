@@ -1,10 +1,12 @@
 #!/bin/bash
 # Checks which Gemini "flash" models your API key can call, and how long one model takes
 # to answer a tiny JSON request, with and without the "low thinking" setting the app sends.
-# Usage: bash scripts/gemini-check.sh [model]     (default model: gemini-3.8-flash)
-# The key is read silently (or from $GEMINI_API_KEY) and is never printed or saved.
+# Usage: bash scripts/gemini-check.sh [model ...]     (default model: gemini-3.8-flash)
+# Several models can be tested in one run. The key is read silently (or from $GEMINI_API_KEY)
+# and is never printed or saved.
 
-MODEL="${1:-gemini-3.8-flash}"
+MODELS=("$@")
+[ ${#MODELS[@]} -eq 0 ] && MODELS=(gemini-3.8-flash)
 if [ -z "$GEMINI_API_KEY" ]; then
   read -r -s -p "Paste your Gemini API key (hidden), then press Return: " GEMINI_API_KEY
   echo
@@ -28,6 +30,7 @@ names = [m["name"].split("/")[-1] for m in d.get("models", [])
 print("\n".join("  " + n for n in sorted(names)) or "  (none found)")
 PY
 
+for MODEL in "${MODELS[@]}"; do
 for THINK in low off; do
   if [ "$THINK" = off ]; then
     CFG='{"temperature":0.2,"responseMimeType":"application/json"}'
@@ -47,4 +50,5 @@ for THINK in low off; do
   else
     echo "  HTTP $CODE after ${SECS}s: $(head -c 300 "$TMP" | tr '\n' ' ')"
   fi
+done
 done
