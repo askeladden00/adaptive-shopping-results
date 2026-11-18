@@ -54,7 +54,7 @@ const EVALSET = [
   { id: "H15", split: "heldout", q: "espresso machine that doesn't sound like a jet engine", gold: { category: "espresso_machines", stage: "compare", must_have: ["quiet"] } },
 ];
 
-const GATE = { intentExact: 0.8, mustF1: 0.8, guardrails: 1.0, judge: 4.0 };
+const GATE = { intentExact: 0.8, mustF1: 0.8, guardrails: 1.0, judge: 4.0, rawGrounding: 0.95 };
 const GUARDRAILS = ["constraints", "ads", "adRelevance", "grounding", "neutrality"];
 const GUARDRAIL_LABEL = { constraints: "Constraints", ads: "Ad label + cap", adRelevance: "Ad relevance", grounding: "Grounded copy", neutrality: "Neutral top pick" };
 
@@ -111,6 +111,9 @@ function summarize(results, engine) {
     msMedian: results.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(n / 2)],
   };
   GUARDRAILS.forEach((g) => (s.guard[g] = mean(results.map((r) => (r.guard[g].pass ? 1 : 0)))));
+  // How often the raw LLM copy failed grounding and the page fell back to template copy.
+  s.llmCopyCases = engine === "Rules baseline" ? 0 : results.filter((r) => !["oos", "empty"].includes(r.out.page.layout)).length;
+  s.rawGroundingFails = results.filter((r) => r.out.fallback.some((f) => f.startsWith("copy: grounding"))).length;
   const judged = results.map((r) => r.judge?.score).filter((x) => typeof x === "number" && x > 0);
   s.judge = judged.length ? mean(judged) : null;
   s.judgeN = judged.length;
@@ -125,6 +128,10 @@ function summarize(results, engine) {
     { name: "Exact intent accuracy (held-out)", value: s.heldout.intentExact, target: GATE.intentExact, pass: s.heldout.intentExact >= GATE.intentExact, fmt: "pct" },
     { name: "Must-have tag F1 (held-out)", value: s.heldout.mustF1, target: GATE.mustF1, pass: s.heldout.mustF1 >= GATE.mustF1, fmt: "num" },
   ];
+  if (s.llmCopyCases) {
+    const rawRate = 1 - s.rawGroundingFails / s.llmCopyCases;
+    s.gates.push({ name: "Raw LLM copy grounded (before fallback)", value: rawRate, target: GATE.rawGrounding, pass: rawRate >= GATE.rawGrounding, fmt: "pct" });
+  }
   if (s.judge !== null) s.gates.push({ name: "LLM judge helpfulness (1-5)", value: s.judge, target: GATE.judge, pass: s.judge >= GATE.judge, fmt: "num" });
   s.verdict = s.gates.every((g) => g.pass) ? "SHIP" : "HOLD";
   return s;
@@ -139,7 +146,8 @@ function resultsMarkdown(results, s) {
   s.gates.forEach((g) => lines.push(`| ${g.name} | ${fmtVal(g.value, g.fmt)} | ${fmtVal(g.target, g.fmt)} | ${g.pass ? "✅" : "❌"} |`));
   lines.push("", `Exact intent accuracy: dev set ${fmtVal(s.dev.intentExact, "pct")} (${s.dev.n} cases), held-out ${fmtVal(s.heldout.intentExact, "pct")} (${s.heldout.n} cases). Must-have F1: dev ${fmtVal(s.dev.mustF1, "num")}, held-out ${fmtVal(s.heldout.mustF1, "num")}.`);
   lines.push("", `Intent fields (all cases): category ${fmtVal(s.category, "pct")}, budget ${fmtVal(s.budget, "pct")}, stage ${fmtVal(s.stage, "pct")}. Fallbacks to baseline: ${s.fallbacks}. Median latency per case: ${s.msMedian} ms.`);
-  lines.push("", "Guardrails: " + GUARDRAILS.map((g) => `${GUARDRAIL_LABEL[g]} ${fmtVal(s.guard[g], "pct")}`).join(", ") + ".", "");
+  if (s.llmCopyCases) lines.push("", `Raw LLM copy failed the grounding check on ${s.rawGroundingFails} of ${s.llmCopyCases} pages; those pages showed template copy instead (runtime guardrail).`);
+  lines.push("", "Guardrails (on the page the shopper sees): " + GUARDRAILS.map((g) => `${GUARDRAIL_LABEL[g]} ${fmtVal(s.guard[g], "pct")}`).join(", ") + ".", "");
   lines.push("| Case | Query | Intent exact | Must F1 | Guardrails | Judge | Notes |", "|---|---|---|---|---|---|---|");
   results.forEach((r) => {
     const failedG = GUARDRAILS.filter((g) => !r.guard[g].pass);
@@ -150,7 +158,10 @@ function resultsMarkdown(results, s) {
     if (r.intent.must < 1) miss.push(`must=[${r.out.intent.must_have.join(", ")}]`);
     if (r.intent.extra === false) miss.push(`ref/exclude/brand off`);
     failedG.forEach((g) => miss.push(`${GUARDRAIL_LABEL[g]}: ${r.guard[g].detail}`));
+    if (failedG.includes("grounding")) miss.push(`overview: "${r.out.copy.overview.replace(/\n/g, " ")}"`);
+    if (r.judge && typeof r.judge.score === "number" && r.judge.score < 4) miss.push(`judge: ${r.judge.reason}`);
     r.out.fallback.forEach((f) => miss.push("fallback " + f));
+    if (r.out.rejectedCopy) miss.push(`rejected overview: "${r.out.rejectedCopy.overview.replace(/\n/g, " ")}" tip: "${r.out.rejectedCopy.tip}" notes: ${JSON.stringify(r.out.rejectedCopy.notes)}`);
     const q = (r.case.q + (r.case.followup ? ` → "${r.case.followup}"` : "")).replace(/\|/g, "/");
     lines.push(`| ${r.case.id} | ${q} | ${r.intent.exact ? "✅" : "❌"} | ${r.intent.must.toFixed(2)} | ${failedG.length ? "❌" : "✅"} | ${r.judge?.score ?? "–"} | ${miss.join("; ").replace(/\|/g, "/")} |`);
   });

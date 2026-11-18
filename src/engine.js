@@ -334,7 +334,7 @@ function templateCopy(it, page) {
   const count = !it.must_have.length ? `${page.total} products match.`
     : page.fullMatches ? `${page.fullMatches} of ${page.total} products meet all your requirements.`
     : `None of the ${page.total} products meet every requirement; the closest matches are shown.`;
-  copy.overview = top ? `${count} ${fullName(top.p)} ($${top.p.price}) ranks first on fit and rating.` : "";
+  copy.overview = top ? `${count} ${fullName(top.p)} ($${top.p.price}) ranks first for your stated needs.` : "";
   return copy;
 }
 
@@ -381,7 +381,11 @@ function checkGrounding(copy, page, it) {
   for (const id of Object.keys(copy.notes || {})) if (!describable.has(id)) issues.push(`note for ${id}, which is not on the page`);
 
   const text = [copy.overview, copy.tip, ...Object.values(copy.notes || {})].join(" ");
-  const allowedPrices = new Set([...describable.values()].map((p) => p.price).concat([it.budget_max, it.budget_min].filter((x) => x !== null)));
+  // Allowed dollar amounts: listed prices, the shopper's budget, and exact differences between them
+  // ("costs $40 more" is grounded if two shown products are $40 apart).
+  const base = [...describable.values()].map((p) => p.price).concat([it.budget_max, it.budget_min].filter((x) => x !== null));
+  const allowedPrices = new Set(base);
+  base.forEach((a) => base.forEach((b) => { if (a > b) allowedPrices.add(a - b); }));
   const prices = [...text.matchAll(/\$\s?(\d[\d,]*)/g)].map((m) => +m[1].replace(/,/g, ""));
   const badPrices = prices.filter((x) => !allowedPrices.has(x));
   if (badPrices.length) issues.push(`prices not on the page: $${badPrices.join(", $")}`);

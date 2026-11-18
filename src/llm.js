@@ -72,8 +72,15 @@ Respond with JSON only, exactly these keys:
 {"category": string|null, "stage": "explore"|"compare"|"buy", "budget_min": number|null, "budget_max": number|null, "must_have": [], "nice_to_have": [], "exclude": [], "brand": string|null, "product_ref": string|null, "summary": string}`;
 }
 
+// The copy model never sees which items are ads (so it can't talk about them); it only learns
+// which items may be the top pick. The judge does see the sponsored flag, to check for favoritism.
 function describeForCopy(s) {
-  return { id: s.p.id, name: fullName(s.p), price: s.p.price, rating: s.p.rating, reviews: s.p.reviews, attrs: s.p.attrs, spec: s.p.spec, matches_needs: s.matched, missing_needs: s.missing, sponsored: !!s.sponsored };
+  return { id: s.p.id, name: fullName(s.p), price: s.p.price, rating: s.p.rating, reviews: s.p.reviews, attrs: s.p.attrs, spec: s.p.spec, matches_needs: s.matched, missing_needs: s.missing, top_pick_eligible: !s.sponsored };
+}
+function describeForJudge(s) {
+  const d = describeForCopy(s);
+  delete d.top_pick_eligible;
+  return { ...d, sponsored: !!s.sponsored };
 }
 
 function copyPrompt(query, it, page) {
@@ -90,23 +97,26 @@ ${JSON.stringify(items, null, 1)}
 
 Write:
 - overview: 2-3 plain sentences that help the shopper decide. Name at most 3 products by their full name and point out the main trade-off.
-- top_pick: the id of the best fit among products where sponsored is false. Use null if the layout is "buy".
+- top_pick: the id of the best fit among products where top_pick_eligible is true. Use null if the layout is "buy".
 - notes: for every product id listed above, at most 16 words on why it fits or what it trades off.
 - reasons: for every product id listed above, the tags from that product's own attrs that matter for this shopper.
 - tip: one short buying tip for this need, with no product names.
 
-Rules: use only the facts given. Write prices exactly as listed, like $129. Do not mention products, brands or prices that are not listed. Do not mention ads, sponsorship or which items are sponsored; the page labels those.
+Rules: use only the facts given. Write prices exactly as listed, like $129. Make exclusive or superlative claims ("the only", "the cheapest", "the quietest") only if the product data above proves them; check every listed product first. Do not mention products, brands or prices that are not listed. Do not discuss ads, sponsorship or eligibility; the page handles labels.
 
 Respond with JSON only: {"overview": string, "top_pick": string|null, "notes": {id: string}, "reasons": {id: [tag]}, "tip": string}`;
 }
 
 function judgePrompt(query, it, page, copy) {
-  const items = [...copyCandidates(page).organic, ...page.sponsored].map(describeForCopy);
+  const items = [...copyCandidates(page).organic, ...page.sponsored].map(describeForJudge);
+  const hero = page.hero ? `Main product the shopper named (shown at the top of the page): ${JSON.stringify({ id: page.hero.id, name: fullName(page.hero), price: page.hero.price, rating: page.hero.rating, reviews: page.hero.reviews, attrs: page.hero.attrs, spec: page.hero.spec })}\n` : "";
   return `You are grading an AI shopping summary. Score how well it helps this shopper decide, from 1 (useless or misleading) to 5 (clear, accurate, addresses their stated needs and trade-offs).
 Penalize claims not supported by the product data, ignoring the shopper's constraints, and favoring sponsored items without reason.
+The page labels sponsored items itself, and by policy the summary must not discuss sponsorship. Do not penalize the summary for not disclosing it.
+The summary may describe only some of the products on the page; that is fine.
 
 Shopper query: """${query}"""
-Products on the page: ${JSON.stringify(items)}
+${hero}Other products on the page: ${JSON.stringify(items)}
 Summary to grade: ${JSON.stringify({ overview: copy.overview, top_pick: copy.top_pick, notes: copy.notes, tip: copy.tip })}
 
 Respond with JSON only: {"score": 1-5, "reason": "one sentence"}`;
@@ -156,6 +166,13 @@ async function writeCopy(out, engine) {
   } else {
     try {
       copy = normalizeCopy(parseJSON(await callModel(engine, copyPrompt(out.query, out.intent, out.page))));
+      // Runtime guardrail: ungrounded copy never reaches the shopper; the page uses the template instead.
+      const issues = checkGrounding(copy, out.page, out.intent);
+      if (issues.length) {
+        out.fallback.push(`copy: grounding check failed (${issues.join("; ")}); used template`);
+        out.rejectedCopy = copy;
+        copy = templateCopy(out.intent, out.page);
+      }
     } catch (e) {
       if (e.code === "rate_limited" || e.code === "not_granted") throw e;
       out.fallback.push(`copy: ${e.message || e.code}; used template`);

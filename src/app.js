@@ -308,6 +308,7 @@ $("run-evals").addEventListener("click", async () => {
   lastMd = resultsMarkdown(results, s);
   $("copy-md").disabled = false;
   renderEvals(engine, stopped);
+  saveRun(engine, s, lastMd, stopped);
 });
 $("copy-md").addEventListener("click", async () => {
   try { await navigator.clipboard.writeText(lastMd); $("copy-md").textContent = "Copied"; }
@@ -349,6 +350,26 @@ function renderEvals(engine, stopped) {
     tr.addEventListener("click", toggle);
     tr.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
   });
+}
+
+// Saves each eval run to the artifact's database (when the page runs as a claude.ai artifact),
+// so runs persist across visits and can be read back for reporting.
+let dbPromise = null;
+if (window.claude && typeof window.claude.use === "function") dbPromise = window.claude.use("db").catch(() => null);
+async function saveRun(engine, s, md, stopped) {
+  const db = dbPromise ? await dbPromise : null;
+  if (!db) return;
+  const id = new Date().toISOString().replace(/[:.]/g, "-") + "-" + engine;
+  try {
+    await db.doc("evalruns/" + id).set({
+      engine, at: new Date().toISOString(), verdict: s.verdict, cases: s.n, stopped: stopped || null,
+      heldoutIntentExact: s.heldout.intentExact, heldoutMustF1: s.heldout.mustF1, devIntentExact: s.dev.intentExact,
+      guardAll: s.guardAll, guard: s.guard, judge: s.judge, rawGroundingFails: s.rawGroundingFails, llmCopyCases: s.llmCopyCases, markdown: md,
+    });
+    $("eval-out").insertAdjacentHTML("afterbegin", `<div class="notice">Saved this run to the artifact's database.</div>`);
+  } catch (e) {
+    $("eval-out").insertAdjacentHTML("afterbegin", `<div class="notice warn">Couldn't save this run: ${esc(e.message || e.code || e)}</div>`);
+  }
 }
 
 // ---------- How it works ----------
