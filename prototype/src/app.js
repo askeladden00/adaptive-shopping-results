@@ -59,7 +59,7 @@ if (window.claude && typeof window.claude.use === "function") {
   // Running as a claude.ai artifact: outside APIs are blocked here, so Gemini can't work.
   const g = $("eng-gemini");
   g.disabled = true;
-  g.title = "Gemini runs only when the page is served locally; claude.ai pages can't call outside APIs";
+  g.title = "Gemini runs only when the page is served locally or from GitHub Pages; claude.ai pages can't call outside APIs";
   if (state.engine === "gemini") setEngine("rules");
   try { localStorage.removeItem("gemini-key"); } catch (e) { /* ignore */ }
   $("gemini-key").value = "";
@@ -421,9 +421,11 @@ $("view-how").innerHTML = `
   <p><b>Shopper value.</b> Fewer reformulated searches. The page shape fits the job: a comparison table when the shopper has requirements, guided browsing when they don't, and a product focus when they name one. One-tap refinements split the remaining options.</p>
   <p><b>Advertiser value.</b> Ads compete on fit, not only on bid. A relevant product with a lower bid can beat a higher bid for an irrelevant one (try “running shoes for flat feet under $120”: the $2.40 carbon racer is filtered out). Intent-level targeting lets an advertiser reach shoppers who never typed a keyword they bid on.</p>
   <p><b>Data.</b> A 48-product sample catalog with fictional brands and 16 fictional campaigns, written for this prototype. No real merchant, advertiser or employer data.</p>
-  <p class="foot">Engines: Claude runs through the claude.ai artifact runtime. Gemini needs your own API key and works when the page runs locally (claude.ai pages can't call outside APIs). The rules baseline is a keyword parser used as the comparison point in the evals.</p>`;
+  <p class="foot">Engines: Claude runs through the claude.ai artifact runtime. Gemini needs your own API key and works when the page runs locally or on GitHub Pages (claude.ai pages can't call outside APIs). The rules baseline is a keyword parser used as the comparison point in the evals.</p>`;
 
 // ---------- Boot ----------
 setEngine("rules");
-$("q").value = EXAMPLES[0];
-search(EXAMPLES[0]);
+// ?q=... opens the page on that query (used by links in the README).
+const startQuery = (new URLSearchParams(location.search).get("q") || "").trim().slice(0, 200) || EXAMPLES[0];
+$("q").value = startQuery;
+search(startQuery);

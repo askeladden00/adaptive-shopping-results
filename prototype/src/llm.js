@@ -24,7 +24,7 @@ async function callModel(engine, prompt, opts = {}) {
     } catch (e) {
       if (e.code === "timeout") throw e;
       // fetch only throws (rather than returning an error status) when the browser blocks or can't send the request.
-      throw { code: "network", message: "Couldn't reach the Gemini API. Gemini works only when this page runs locally (python3 -m http.server, then http://localhost:8000), not on claude.ai. If you're already local, check your connection and any ad or privacy blocker." };
+      throw { code: "network", message: "Couldn't reach the Gemini API. Gemini works when this page runs locally (python3 -m http.server, then http://localhost:8000/prototype/) or on GitHub Pages, not on claude.ai. If you're already local, check your connection and any ad or privacy blocker." };
     }
     if (res.status === 400 && withThinking) {
       const body = await res.text();
