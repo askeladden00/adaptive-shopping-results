@@ -3,7 +3,7 @@
 
 const LLM = {
   sample: null,               // claude.ai `sample` capability, set when the page runs as an artifact
-  gemini: { key: "", model: "gemini-3.8-flash", thinkingOk: true },
+  gemini: { key: "", model: "gemini-3.5-flash", thinkingOk: true },
 };
 
 async function callModel(engine, prompt, opts = {}) {
@@ -14,9 +14,9 @@ async function callModel(engine, prompt, opts = {}) {
   }
   if (engine === "gemini") {
     if (!LLM.gemini.key) throw { code: "no_key", message: "Add a Gemini API key first." };
-    // Newer Gemini models "think" before answering, which makes these structured-output calls slow.
-    // Ask for low thinking; if this model rejects the setting, retry once without it and remember.
-    const withThinking = LLM.gemini.thinkingOk !== false;
+    // Optional "low thinking" request. Off by default: in a timing check on gemini-3.5-flash a tiny
+    // request took 6.5 s with it and 1.6 s without. If turned on and a model rejects it, retry without.
+    const withThinking = GEMINI_LOW_THINKING && LLM.gemini.thinkingOk !== false;
     let res;
     try {
       res = await geminiFetch(prompt, withThinking);
@@ -52,6 +52,7 @@ async function callModel(engine, prompt, opts = {}) {
 }
 
 const GEMINI_TIMEOUT_MS = 60000;
+const GEMINI_LOW_THINKING = false;
 const GEMINI_RETRY_DELAYS_MS = [2000, 5000];
 
 async function geminiFetch(prompt, withThinking) {

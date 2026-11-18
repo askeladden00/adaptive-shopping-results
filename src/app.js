@@ -42,11 +42,11 @@ $("engine-seg").addEventListener("click", (ev) => {
 });
 try {
   $("gemini-key").value = localStorage.getItem("gemini-key") || "";
-  $("gemini-model").value = localStorage.getItem("gemini-model") || "gemini-3.8-flash";
+  $("gemini-model").value = localStorage.getItem("gemini-model") || "gemini-3.5-flash";
 } catch (e) { /* storage unavailable */ }
 function syncGemini() {
   LLM.gemini.key = $("gemini-key").value.trim();
-  const model = $("gemini-model").value.trim() || "gemini-3.8-flash";
+  const model = $("gemini-model").value.trim() || "gemini-3.5-flash";
   if (model !== LLM.gemini.model) LLM.gemini.thinkingOk = true; // re-check the thinking setting for a new model
   LLM.gemini.model = model;
   try { localStorage.setItem("gemini-key", LLM.gemini.key); localStorage.setItem("gemini-model", LLM.gemini.model); } catch (e) { /* ignore */ }
