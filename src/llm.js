@@ -34,6 +34,15 @@ async function callModel(engine, prompt, opts = {}) {
       throw { code: "http_400", message: `Gemini returned 400: ${body.slice(0, 200)}` };
     }
     if (res.status === 429) throw { code: "rate_limited", message: "Gemini rate limit hit." };
+    // 500/503: Google-side overload, usually brief. Retry twice with backoff before giving up.
+    if (res.status === 503 || res.status === 500) {
+      const attempt = opts.attempt || 0;
+      if (attempt < GEMINI_RETRY_DELAYS_MS.length) {
+        await new Promise((r) => setTimeout(r, GEMINI_RETRY_DELAYS_MS[attempt] + Math.random() * 500));
+        return callModel(engine, prompt, { ...opts, attempt: attempt + 1 });
+      }
+      throw { code: "overloaded", message: `Gemini (${LLM.gemini.model}) is overloaded right now (HTTP ${res.status}, tried ${attempt + 1} times). Try again in a minute, or switch to another model from Google AI Studio's list.` };
+    }
     if (!res.ok) throw { code: "http_" + res.status, message: `Gemini returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
     const data = await res.json();
     // Skip any "thought" parts; keep only the answer text.
@@ -43,6 +52,7 @@ async function callModel(engine, prompt, opts = {}) {
 }
 
 const GEMINI_TIMEOUT_MS = 60000;
+const GEMINI_RETRY_DELAYS_MS = [2000, 5000];
 
 async function geminiFetch(prompt, withThinking) {
   const generationConfig = { temperature: 0.2, responseMimeType: "application/json" };
@@ -180,6 +190,8 @@ async function runPipeline(query, engine, prevIntent) {
       if (e.code === "rate_limited" || e.code === "not_granted") throw e;
       out.fallback.push(`intent: ${e.message || e.code}; used rules baseline`);
       out.rawIntent = rulesIntent(query, prevIntent);
+      // Model overloaded or too slow: don't make the shopper wait on a second call that will likely fail too.
+      if (e.code === "overloaded" || e.code === "timeout") out.modelDown = true;
     }
   }
   out.ms.intent = Math.round(performance.now() - t);
@@ -196,6 +208,9 @@ async function writeCopy(out, engine) {
   const t = performance.now();
   let copy;
   if (engine === "rules" || ["oos", "empty"].includes(out.page.layout)) {
+    copy = templateCopy(out.intent, out.page);
+  } else if (out.modelDown) {
+    out.fallback.push("copy: skipped the model call because it was unavailable; used template");
     copy = templateCopy(out.intent, out.page);
   } else {
     try {
