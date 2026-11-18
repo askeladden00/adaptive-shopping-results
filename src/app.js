@@ -54,6 +54,14 @@ $("gemini-model").addEventListener("change", syncGemini);
 syncGemini();
 
 if (window.claude && typeof window.claude.use === "function") {
+  // Running as a claude.ai artifact: outside APIs are blocked here, so Gemini can't work.
+  const g = $("eng-gemini");
+  g.disabled = true;
+  g.title = "Gemini runs only when the page is served locally; claude.ai pages can't call outside APIs";
+  if (state.engine === "gemini") setEngine("rules");
+  try { localStorage.removeItem("gemini-key"); } catch (e) { /* ignore */ }
+  $("gemini-key").value = "";
+  LLM.gemini.key = "";
   window.claude.use("sample").then((s) => {
     if (!s) return;
     LLM.sample = s;

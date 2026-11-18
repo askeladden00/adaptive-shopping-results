@@ -14,14 +14,20 @@ async function callModel(engine, prompt, opts = {}) {
   }
   if (engine === "gemini") {
     if (!LLM.gemini.key) throw { code: "no_key", message: "Add a Gemini API key first." };
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM.gemini.model)}:generateContent`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": LLM.gemini.key },
-      body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
-      }),
-    });
+    let res;
+    try {
+      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM.gemini.model)}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": LLM.gemini.key },
+        body: JSON.stringify({
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
+        }),
+      });
+    } catch (e) {
+      // fetch only throws (rather than returning an error status) when the browser blocks or can't send the request.
+      throw { code: "network", message: "Couldn't reach the Gemini API. Gemini works only when this page runs locally (python3 -m http.server, then http://localhost:8000), not on claude.ai. If you're already local, check your connection and any ad or privacy blocker." };
+    }
     if (res.status === 429) throw { code: "rate_limited", message: "Gemini rate limit hit." };
     if (!res.ok) throw { code: "http_" + res.status, message: `Gemini returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
     const data = await res.json();
