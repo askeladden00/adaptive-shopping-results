@@ -48,7 +48,7 @@ The LLM does only the two jobs rules do badly:
 
 Everything with money or trust attached is deterministic code: retrieval, ranking, the auction, ad labels and caps, and layout choice. A **schema guard** sits between the LLM and that code. It drops tags outside the vocabulary and products or brands that don't exist, so a model mistake can't invent a filter. If an LLM call fails, the page falls back to the rules baseline and says so.
 
-Engines (switch in the header): **Claude** (claude.ai artifact runtime), **Gemini** (your API key, local only; the code path is written but I haven't tested it), and the **Rules baseline** (keyword parser and templates, the comparison point for evals).
+Engines (switch in the header): **Claude** (claude.ai artifact runtime), **Gemini** (your API key, local only; it answers live searches, but a full eval run hasn't finished yet because of free-tier rate limits and Google-side overload. Eval runs on Gemini are paced to about 8 calls a minute and wait out per-minute rate limits), and the **Rules baseline** (keyword parser and templates, the comparison point for evals).
 
 ## How it was evaluated
 

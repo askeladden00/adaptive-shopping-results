@@ -3,7 +3,7 @@
 
 const LLM = {
   sample: null,               // claude.ai `sample` capability, set when the page runs as an artifact
-  gemini: { key: "", model: "gemini-3.5-flash", thinkingOk: true },
+  gemini: { key: "", model: "gemini-3.5-flash", thinkingOk: true, paced: false, onWait: null },
 };
 
 async function callModel(engine, prompt, opts = {}) {
@@ -19,6 +19,7 @@ async function callModel(engine, prompt, opts = {}) {
     const withThinking = GEMINI_LOW_THINKING && LLM.gemini.thinkingOk !== false;
     let res;
     try {
+      await geminiPace();
       res = await geminiFetch(prompt, withThinking);
     } catch (e) {
       if (e.code === "timeout") throw e;
@@ -33,7 +34,22 @@ async function callModel(engine, prompt, opts = {}) {
       }
       throw { code: "http_400", message: `Gemini returned 400: ${body.slice(0, 200)}` };
     }
-    if (res.status === 429) throw { code: "rate_limited", message: "Gemini rate limit hit." };
+    if (res.status === 429) {
+      const body = await res.text();
+      // A daily quota can't be waited out. A per-minute limit can: in a paced eval run, wait the
+      // delay Google asks for (or a minute) and retry, up to GEMINI_429_RETRIES times.
+      const daily = /PerDay/i.test(body);
+      const tries = opts.tries429 || 0;
+      if (LLM.gemini.paced && !daily && tries < GEMINI_429_RETRIES) {
+        const m = body.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/);
+        const waitMs = Math.min(Math.max(m ? parseFloat(m[1]) * 1000 + 1000 : 60000, 5000), 120000);
+        await geminiWait(waitMs, "Gemini rate limit");
+        return callModel(engine, prompt, { ...opts, tries429: tries + 1 });
+      }
+      throw { code: "rate_limited", daily, message: daily
+        ? "Gemini's daily free-tier quota for this model is used up. It resets at midnight Pacific time; a paid key or another model avoids it."
+        : "Gemini rate limit hit." };
+    }
     // 500/503: Google-side overload, usually brief. Retry twice with backoff before giving up.
     if (res.status === 503 || res.status === 500) {
       const attempt = opts.attempt || 0;
@@ -54,6 +70,28 @@ async function callModel(engine, prompt, opts = {}) {
 const GEMINI_TIMEOUT_MS = 60000;
 const GEMINI_LOW_THINKING = false;
 const GEMINI_RETRY_DELAYS_MS = [2000, 5000];
+// Eval runs make about 2 calls per case. With pacing on, calls start at least this far apart
+// (about 8 a minute) so a free-tier key stays under its per-minute limit.
+const GEMINI_PACED_GAP_MS = 7500;
+const GEMINI_429_RETRIES = 3;
+let geminiLastStart = 0;
+
+async function geminiPace() {
+  if (!LLM.gemini.paced) return;
+  const waitMs = geminiLastStart + GEMINI_PACED_GAP_MS - Date.now();
+  if (waitMs > 0) await geminiWait(waitMs, null);
+  geminiLastStart = Date.now();
+}
+
+// Sleeps, telling the UI (if it listens) how long is left, once a second.
+async function geminiWait(ms, reason) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    if (reason && LLM.gemini.onWait) LLM.gemini.onWait(reason, Math.ceil((end - Date.now()) / 1000));
+    await new Promise((r) => setTimeout(r, Math.min(1000, end - Date.now())));
+  }
+  if (reason && LLM.gemini.onWait) LLM.gemini.onWait(null, 0);
+}
 
 async function geminiFetch(prompt, withThinking) {
   const generationConfig = { temperature: 0.2, responseMimeType: "application/json" };

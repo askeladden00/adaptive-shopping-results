@@ -307,12 +307,31 @@ $("run-evals").addEventListener("click", async () => {
   $("run-evals").disabled = true; $("eval-status").hidden = false;
   const results = [];
   let stopped = null;
+  // Gemini runs are paced to fit a free-tier per-minute limit, and wait out 429s instead of stopping.
+  const paced = engine === "gemini";
+  const started = Date.now();
+  let caseText = "";
+  const showStatus = (wait) => {
+    const mins = Math.floor((Date.now() - started) / 60000);
+    $("eval-status-text").textContent = caseText
+      + (paced ? ` (paced for the free tier, ${mins} min so far)` : "")
+      + (wait ? `. ${wait}` : "");
+  };
+  LLM.gemini.paced = paced;
+  LLM.gemini.onWait = (reason, secs) => showStatus(reason ? `${reason}: waiting ${secs}s, then retrying` : "");
   for (let i = 0; i < EVALSET.length; i++) {
-    $("eval-status-text").textContent = `${ENGINE_LABEL[engine]}: case ${i + 1} of ${EVALSET.length}`;
+    caseText = `${ENGINE_LABEL[engine]}: case ${i + 1} of ${EVALSET.length}`;
+    showStatus("");
     $("eval-bar").style.width = `${(i / EVALSET.length) * 100}%`;
     try { results.push(await runEvalCase(EVALSET[i], engine, withJudge)); }
-    catch (e) { stopped = e.code === "rate_limited" ? "Stopped early: the model is rate limited." : e.code === "not_granted" ? "Stopped: Claude access was not granted." : "Stopped: " + (e.message || e.code); break; }
+    catch (e) {
+      stopped = e.code === "rate_limited"
+        ? (e.daily ? "Stopped early: " + e.message : "Stopped early: the model was still rate limited after waiting.")
+        : e.code === "not_granted" ? "Stopped: Claude access was not granted." : "Stopped: " + (e.message || e.code);
+      break;
+    }
   }
+  LLM.gemini.paced = false; LLM.gemini.onWait = null;
   $("eval-bar").style.width = "100%";
   $("eval-status").hidden = true; $("run-evals").disabled = false;
   if (!results.length) { $("eval-out").innerHTML = `<div class="notice err">${esc(stopped)}</div>`; return; }

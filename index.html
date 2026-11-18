@@ -233,7 +233,7 @@ th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--lin
     <div class="eval-head">
       <div>
         <h2>Evaluation suite</h2>
-        <p>41 hand-labeled shopper queries: a 26-case dev set (including out-of-scope, prompt-injection, no-result and multi-turn cases) and a 15-case held-out set written after the rules and prompt were frozen. Each case is scored on intent accuracy against a gold label and on five guardrails that must hold on every page. The release gate decides SHIP or HOLD for the selected engine: guardrails on every case, intent accuracy on the held-out set.</p>
+        <p>41 hand-labeled shopper queries: a 26-case dev set (including out-of-scope, prompt-injection, no-result and multi-turn cases) and a 15-case held-out set written after the rules and prompt were frozen. Each case is scored on intent accuracy against a gold label and on five guardrails that must hold on every page. The release gate decides SHIP or HOLD for the selected engine: guardrails on every case, intent accuracy on the held-out set. Gemini runs are paced for free-tier keys (about 8 calls a minute, waiting out rate limits), so a full run takes roughly 15 to 25 minutes.</p>
       </div>
       <div class="eval-ctl">
         <label class="switch"><input type="checkbox" id="use-judge"> Add LLM judge</label>
