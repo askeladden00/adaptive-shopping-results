@@ -42,11 +42,13 @@ $("engine-seg").addEventListener("click", (ev) => {
 });
 try {
   $("gemini-key").value = localStorage.getItem("gemini-key") || "";
-  $("gemini-model").value = localStorage.getItem("gemini-model") || "gemini-2.5-flash";
+  $("gemini-model").value = localStorage.getItem("gemini-model") || "gemini-3.8-flash";
 } catch (e) { /* storage unavailable */ }
 function syncGemini() {
   LLM.gemini.key = $("gemini-key").value.trim();
-  LLM.gemini.model = $("gemini-model").value.trim() || "gemini-2.5-flash";
+  const model = $("gemini-model").value.trim() || "gemini-3.8-flash";
+  if (model !== LLM.gemini.model) LLM.gemini.thinkingOk = true; // re-check the thinking setting for a new model
+  LLM.gemini.model = model;
   try { localStorage.setItem("gemini-key", LLM.gemini.key); localStorage.setItem("gemini-model", LLM.gemini.model); } catch (e) { /* ignore */ }
 }
 $("gemini-key").addEventListener("change", syncGemini);
@@ -96,11 +98,14 @@ async function run(fn, label) {
   state.busy = true; state.note = ""; state.error = null; state.loading = label;
   $("search-btn").disabled = true;
   renderResults();
+  const t0 = Date.now();
+  const tick = setInterval(() => { const el = $("elapsed"); if (el) el.textContent = Math.round((Date.now() - t0) / 1000); }, 1000);
   try { await fn(); } catch (e) {
     state.error = e.code === "not_granted" ? "Claude access was not granted for this page. Use the rules baseline, or allow access and try again."
       : e.code === "rate_limited" ? "The model is rate limited right now. Wait a minute and try again."
       : e.message || String(e);
   }
+  clearInterval(tick);
   state.busy = false; state.loading = null; $("search-btn").disabled = false;
   renderResults();
 }
@@ -228,7 +233,7 @@ function checksStrip(checks) {
 function renderResults() {
   const el = $("results");
   const parts = [];
-  if (state.loading) parts.push(`<div class="loading"><div class="spinner"></div>${esc(state.loading)} <span style="font-size:12px">(${ENGINE_LABEL[state.engine]})</span></div>`);
+  if (state.loading) parts.push(`<div class="loading"><div class="spinner"></div>${esc(state.loading)} <span style="font-size:12px">(${ENGINE_LABEL[state.engine]} · <span id="elapsed">0</span>s)</span></div>`);
   if (state.error) parts.push(`<div class="notice err">${esc(state.error)}</div>`);
   if (state.note && !state.loading) parts.push(`<div class="notice">${esc(state.note)}</div>`);
   const o = state.out;

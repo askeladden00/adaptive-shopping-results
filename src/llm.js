@@ -3,7 +3,7 @@
 
 const LLM = {
   sample: null,               // claude.ai `sample` capability, set when the page runs as an artifact
-  gemini: { key: "", model: "gemini-2.5-flash" },
+  gemini: { key: "", model: "gemini-3.8-flash", thinkingOk: true },
 };
 
 async function callModel(engine, prompt, opts = {}) {
@@ -14,26 +14,54 @@ async function callModel(engine, prompt, opts = {}) {
   }
   if (engine === "gemini") {
     if (!LLM.gemini.key) throw { code: "no_key", message: "Add a Gemini API key first." };
+    // Newer Gemini models "think" before answering, which makes these structured-output calls slow.
+    // Ask for low thinking; if this model rejects the setting, retry once without it and remember.
+    const withThinking = LLM.gemini.thinkingOk !== false;
     let res;
     try {
-      res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM.gemini.model)}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": LLM.gemini.key },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
-        }),
-      });
+      res = await geminiFetch(prompt, withThinking);
     } catch (e) {
+      if (e.code === "timeout") throw e;
       // fetch only throws (rather than returning an error status) when the browser blocks or can't send the request.
       throw { code: "network", message: "Couldn't reach the Gemini API. Gemini works only when this page runs locally (python3 -m http.server, then http://localhost:8000), not on claude.ai. If you're already local, check your connection and any ad or privacy blocker." };
+    }
+    if (res.status === 400 && withThinking) {
+      const body = await res.text();
+      if (/thinking/i.test(body)) {
+        LLM.gemini.thinkingOk = false;
+        return callModel(engine, prompt, opts);
+      }
+      throw { code: "http_400", message: `Gemini returned 400: ${body.slice(0, 200)}` };
     }
     if (res.status === 429) throw { code: "rate_limited", message: "Gemini rate limit hit." };
     if (!res.ok) throw { code: "http_" + res.status, message: `Gemini returned ${res.status}: ${(await res.text()).slice(0, 200)}` };
     const data = await res.json();
-    return (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("");
+    // Skip any "thought" parts; keep only the answer text.
+    return (data.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
   }
   throw { code: "bad_engine", message: "Unknown engine " + engine };
+}
+
+const GEMINI_TIMEOUT_MS = 60000;
+
+async function geminiFetch(prompt, withThinking) {
+  const generationConfig = { temperature: 0.2, responseMimeType: "application/json" };
+  if (withThinking) generationConfig.thinkingConfig = { thinkingLevel: "low" };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), GEMINI_TIMEOUT_MS);
+  try {
+    return await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(LLM.gemini.model)}:generateContent`, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: { "Content-Type": "application/json", "x-goog-api-key": LLM.gemini.key },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig }),
+    });
+  } catch (e) {
+    if (e.name === "AbortError") throw { code: "timeout", message: `Gemini didn't answer within ${GEMINI_TIMEOUT_MS / 1000} seconds.` };
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function parseJSON(text) {
