@@ -85,9 +85,13 @@ function scoreIntent(gold, it) {
 async function runEvalCase(c, engine, withJudge) {
   const t = performance.now();
   let out = await runPipeline(c.q, engine, null);
+  const firstFallback = out.fallback;
   if (c.followup) out = await runPipeline(c.followup, engine, out.intent);
   const ms = Math.round(performance.now() - t);
-  const intent = scoreIntent(c.gold, out.intent);
+  let intent = scoreIntent(c.gold, out.intent);
+  // If the model failed and the rules baseline answered instead, the engine gets no credit for that answer.
+  const intentFellBack = engine !== "rules" && [...(c.followup ? firstFallback : []), ...out.fallback].some((f) => f.startsWith("intent:"));
+  if (intentFellBack) intent = { category: false, budget: false, stage: false, must: 0, extra: false, exact: false, fellBack: true };
   let judge = null;
   if (withJudge) {
     try { judge = await judgeCopy(engine, out); } catch (e) { if (e.code === "rate_limited" || e.code === "not_granted") throw e; judge = { score: null, reason: "judge failed: " + (e.message || e.code) }; }
@@ -111,9 +115,14 @@ function summarize(results, engine) {
     msMedian: results.map((r) => r.ms).sort((a, b) => a - b)[Math.floor(n / 2)],
   };
   GUARDRAILS.forEach((g) => (s.guard[g] = mean(results.map((r) => (r.guard[g].pass ? 1 : 0)))));
-  // How often the raw LLM copy failed grounding and the page fell back to template copy.
-  s.llmCopyCases = engine === "Rules baseline" ? 0 : results.filter((r) => !["oos", "empty"].includes(r.out.page.layout)).length;
-  s.rawGroundingFails = results.filter((r) => r.out.fallback.some((f) => f.startsWith("copy: grounding"))).length;
+  // How often the raw LLM copy failed grounding, counted only over summaries the model actually wrote
+  // (not pages where the call errored, timed out or was skipped).
+  s.intentFallbacks = results.filter((r) => r.intent.fellBack).length;
+  const wroteCopy = (r) => !["oos", "empty"].includes(r.out.page.layout) &&
+    !r.out.fallback.some((f) => f.startsWith("copy:") && !f.startsWith("copy: grounding"));
+  s.llmCopyCases = engine === "Rules baseline" ? 0 : results.filter(wroteCopy).length;
+  s.rawGroundingFails = results.filter((r) => wroteCopy(r) && r.out.fallback.some((f) => f.startsWith("copy: grounding"))).length;
+  s.complete = n === EVALSET.length;
   const judged = results.map((r) => r.judge?.score).filter((x) => typeof x === "number" && x > 0);
   s.judge = judged.length ? mean(judged) : null;
   s.judgeN = judged.length;
@@ -124,13 +133,14 @@ function summarize(results, engine) {
   s.dev = split("dev");
   s.heldout = split("heldout");
   s.gates = [
+    { name: `All ${EVALSET.length} cases ran`, value: n / EVALSET.length, target: 1, pass: s.complete, fmt: "pct" },
     { name: "Guardrails pass on every case", value: s.guardAll, target: GATE.guardrails, pass: s.guardAll >= GATE.guardrails, fmt: "pct" },
     { name: "Exact intent accuracy (held-out)", value: s.heldout.intentExact, target: GATE.intentExact, pass: s.heldout.intentExact >= GATE.intentExact, fmt: "pct" },
     { name: "Must-have tag F1 (held-out)", value: s.heldout.mustF1, target: GATE.mustF1, pass: s.heldout.mustF1 >= GATE.mustF1, fmt: "num" },
   ];
-  if (s.llmCopyCases) {
-    const rawRate = 1 - s.rawGroundingFails / s.llmCopyCases;
-    s.gates.push({ name: "Raw LLM copy grounded (before fallback)", value: rawRate, target: GATE.rawGrounding, pass: rawRate >= GATE.rawGrounding, fmt: "pct" });
+  if (engine !== "Rules baseline") {
+    const rawRate = s.llmCopyCases ? 1 - s.rawGroundingFails / s.llmCopyCases : null;
+    s.gates.push({ name: "Raw LLM copy grounded (before fallback)", value: rawRate, target: GATE.rawGrounding, pass: rawRate !== null && rawRate >= GATE.rawGrounding, fmt: "pct" });
   }
   if (s.judge !== null) s.gates.push({ name: "LLM judge helpfulness (1-5)", value: s.judge, target: GATE.judge, pass: s.judge >= GATE.judge, fmt: "num" });
   s.verdict = s.gates.every((g) => g.pass) ? "SHIP" : "HOLD";
@@ -146,7 +156,7 @@ function resultsMarkdown(results, s) {
   s.gates.forEach((g) => lines.push(`| ${g.name} | ${fmtVal(g.value, g.fmt)} | ${fmtVal(g.target, g.fmt)} | ${g.pass ? "✅" : "❌"} |`));
   lines.push("", `Exact intent accuracy: dev set ${fmtVal(s.dev.intentExact, "pct")} (${s.dev.n} cases), held-out ${fmtVal(s.heldout.intentExact, "pct")} (${s.heldout.n} cases). Must-have F1: dev ${fmtVal(s.dev.mustF1, "num")}, held-out ${fmtVal(s.heldout.mustF1, "num")}.`);
   lines.push("", `Intent fields (all cases): category ${fmtVal(s.category, "pct")}, budget ${fmtVal(s.budget, "pct")}, stage ${fmtVal(s.stage, "pct")}. Fallbacks to baseline: ${s.fallbacks}. Median latency per case: ${s.msMedian} ms.`);
-  if (s.llmCopyCases) lines.push("", `Raw LLM copy failed the grounding check on ${s.rawGroundingFails} of ${s.llmCopyCases} pages; those pages showed template copy instead (runtime guardrail).`);
+  if (s.engine !== "Rules baseline") lines.push("", `The model failed to answer intent on ${s.intentFallbacks} of ${s.n} cases; those count as intent misses. It wrote ${s.llmCopyCases} summaries, and ${s.rawGroundingFails} failed the grounding check (those pages showed template copy instead).`);
   lines.push("", "Guardrails (on the page the shopper sees): " + GUARDRAILS.map((g) => `${GUARDRAIL_LABEL[g]} ${fmtVal(s.guard[g], "pct")}`).join(", ") + ".", "");
   lines.push("| Case | Query | Intent exact | Must F1 | Guardrails | Judge | Notes |", "|---|---|---|---|---|---|---|");
   results.forEach((r) => {
